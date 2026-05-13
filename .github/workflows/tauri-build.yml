@@ -1,0 +1,165 @@
+name: Build Desktop App
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Create a release'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            backend_target: x86_64-pc-windows-msvc
+            name: Windows
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            backend_target: aarch64-apple-darwin
+            name: macOS (Apple Silicon)
+
+    runs-on: ${{ matrix.platform }}
+    name: Build (${{ matrix.name }})
+
+    env:
+      NODE_OPTIONS: --max-old-space-size=6144
+
+    defaults:
+      run:
+        shell: bash -el {0}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: 'pnpm'
+
+      - name: Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: '3.11'
+          channels: conda-forge
+          auto-activate-base: false
+          activate-environment: catgo
+
+      - name: Install Python dependencies
+        run: |
+          conda install -y -c conda-forge openbabel pip
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          grep -iv '^openbabel' server/requirements.txt > reqs_no_ob.txt
+          pip install -r reqs_no_ob.txt
+          rm reqs_no_ob.txt
+
+      - name: Build backend (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd server
+          python -m PyInstaller catgo_server.spec --noconfirm
+          mkdir -p ../src-tauri/binaries
+          cp dist/catgo-server ../src-tauri/binaries/catgo-server-${{ matrix.backend_target }}
+          chmod +x ../src-tauri/binaries/catgo-server-${{ matrix.backend_target }}
+
+      - name: Build backend (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd server
+          python -m PyInstaller catgo_server.spec --noconfirm
+          mkdir -p ../src-tauri/binaries
+          cp dist/catgo-server.exe ../src-tauri/binaries/catgo-server-${{ matrix.backend_target }}.exe
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}, wasm32-unknown-unknown
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install frontend dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build WASM extensions
+        run: |
+          if ! command -v wasm-pack &> /dev/null; then
+            curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+          fi
+          export PATH=$PATH:$HOME/.cargo/bin
+
+          cd extensions/rust
+          wasm-pack build --target web --out-dir ../rust-wasm/pkg --features wasm
+
+          cd ../chgdiff-wasm
+          wasm-pack build --target web --out-dir ../../src/lib/electronic/chgdiff-wasm-pkg
+
+      - name: Generate documentation chunks
+        run: pnpm run build:doc-chunks
+
+      - name: Verify generated build assets
+        run: |
+          ls -la extensions/rust-wasm/pkg/ferrox_bg.wasm
+          ls -la src/lib/electronic/chgdiff-wasm-pkg/chgdiff_wasm_bg.wasm
+          ls -la src/lib/chat/docs-chunks.json
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Generate icons
+        run: node scripts/generate-icons.js
+
+      - name: Build agent sidecar (Bun-compiled Node binary)
+        run: pnpm build:agent
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0.6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'CatGo ${{ github.ref_name }}'
+          releaseBody: |
+            ## CatGo Desktop Application
+
+            This release includes the bundled backend server (excluding MLP libraries).
+
+            ### Downloads
+            - **Windows**: Download `.msi` (recommended) or `.exe`
+            - **macOS**: Download `.dmg` (Apple Silicon M1/M2/M3)
+
+            ### Installation
+            - **Windows**: Run the `.msi` installer
+            - **macOS**: Open `.dmg` and drag CatGo to Applications
+
+            ### Features
+            - Built-in calculation backend (xTB, EMT)
+            - OPTIMADE database browser
+            - PubChem molecule search
+            - VASP/QE/LAMMPS input generators
+
+            ### What's New
+            See [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }}

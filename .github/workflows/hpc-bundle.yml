@@ -1,0 +1,109 @@
+name: Build HPC Bundle
+
+# Builds the pre-built frontend + server bundle that the install-catgo.sh
+# installer downloads on HPC systems (which don't have Node.js).
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+      - dev
+    paths:
+      - '.github/workflows/hpc-bundle.yml'
+      - 'desktop/**'
+      - 'docs/**'
+      - 'extensions/**'
+      - 'scripts/build-doc-chunks.js'
+      - 'src/**'
+      - 'server/**'
+      - 'static/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'vite.desktop.config.ts'
+      - 'vite.shared.ts'
+      - 'svelte.config.js'
+  workflow_dispatch:
+
+jobs:
+  build-bundle:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Generate SvelteKit tsconfig + ambient types
+        run: pnpm exec svelte-kit sync
+
+      - name: Build WASM extensions
+        run: |
+          export PATH=$PATH:$HOME/.cargo/bin
+
+          cd extensions/rust
+          wasm-pack build --target web --out-dir ../rust-wasm/pkg --features wasm
+
+          cd ../chgdiff-wasm
+          wasm-pack build --target web --out-dir ../../src/lib/electronic/chgdiff-wasm-pkg
+
+      - name: Build documentation chunks
+        run: pnpm run build:doc-chunks
+
+      - name: Build frontend
+        run: pnpm run deploy:build
+
+      - name: Create HPC bundle
+        run: |
+          BUNDLE_DIR="catgo-hpc-bundle"
+          mkdir -p "$BUNDLE_DIR"
+
+          # Copy pre-built frontend
+          cp -r build-desktop "$BUNDLE_DIR/frontend"
+
+          # Copy server (Python backend)
+          cp -r server "$BUNDLE_DIR/server"
+
+          # Remove __pycache__ and .pyc files
+          find "$BUNDLE_DIR/server" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+          find "$BUNDLE_DIR/server" -name "*.pyc" -delete 2>/dev/null || true
+
+          # Create tarball
+          tar czf catgo-hpc-bundle.tar.gz -C "$BUNDLE_DIR" frontend server
+
+          echo "Bundle contents:"
+          tar tzf catgo-hpc-bundle.tar.gz | head -20
+          echo "..."
+          echo "Bundle size: $(du -h catgo-hpc-bundle.tar.gz | cut -f1)"
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: catgo-hpc-bundle
+          path: catgo-hpc-bundle.tar.gz
+          retention-days: 90
+
+      # Attach to release when triggered by a tag
+      - name: Upload to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: catgo-hpc-bundle.tar.gz
