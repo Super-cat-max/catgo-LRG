@@ -1,0 +1,8 @@
+name = "catgo-docs"
+compatibility_date = "2026-05-13"
+
+# Static-assets-only Worker for the VitePress documentation site.
+# Cloudflare auto-serves files from `directory`; no Worker script needed.
+[assets]
+directory = "./docs/.vitepress/dist"
+not_found_handling = "404-page"
