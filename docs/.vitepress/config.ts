@@ -3,7 +3,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: `CatGo`,
   description:
-    `An open-source, browser-based platform for interactive visualization, structure building, and AI-assisted workflow automation in computational materials science and catalysis research.`,
+    `AI-driven workbench for computational materials science. Build structures, run workflows on HPC, and chat with CatBot — all from one desktop app.`,
   lang: `en-US`,
 
   // Deploy as static site under /docs/ or root — adjust as needed

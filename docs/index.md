@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: CatGo
-  text: Catalysis Visualization System
-  tagline: An Interactive Web-Based Platform for Materials Visualization, Structure Building, and AI-Assisted Computational Workflows.
+  text: AI-Driven Workbench for Computational Materials Science
+  tagline: Build structures, run workflows, and chat with CatBot — all from one window.
   actions:
     - theme: brand
       text: Get Started

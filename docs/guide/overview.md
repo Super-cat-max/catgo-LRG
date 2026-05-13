@@ -1,6 +1,6 @@
 # CatGo Documentation
 
-**CatGo** (Catalysis Visualization System) is an open-source, browser-based platform for interactive visualization, structure building, and AI-assisted workflow automation in computational materials science and catalysis research. It runs in the browser, as a desktop application (Tauri), and as a VSCode extension, providing 3D crystal and molecular structure viewers, periodic tables, band structure plots, phase diagrams, trajectory players, and a node-based workflow editor with integrated HPC orchestration.
+**CatGo** is an **AI-driven workbench for computational materials science**. It combines an interactive 3D structure viewer, a visual DAG workflow engine, integrated HPC orchestration, and a natural-language AI assistant (**CatBot**) into a single desktop application (Tauri) — with an additional VS Code extension for in-editor workflows. The viewer handles crystals, molecules, and surfaces; the workflow engine generates DFT/MD/ML inputs, submits and monitors jobs on remote clusters, and post-processes results through band structure plots, phase diagrams, trajectory players, and more.
 
 ## Key Features
 
@@ -63,44 +63,44 @@ CatGo
 
 ### Core
 
-| Module | Description | Docs |
-|--------|-------------|------|
-| [Structure Viewer](/modules/core/structure-viewer) | 3D interactive visualization of atoms, bonds, and lattices | [Link](/modules/core/structure-viewer) |
-| [File I/O](/modules/core/file-io) | Parse and export crystal/molecular structure files | [Link](/modules/core/file-io) |
-| [Lattice & Cell](/modules/core/lattice-cell) | Lattice parameters, coordinate transforms, cell operations | [Link](/modules/core/lattice-cell) |
-| [Bonding](/modules/core/bonding) | Bond detection, editing, and coordination analysis | [Link](/modules/core/bonding) |
+| Module | Description |
+|--------|-------------|
+| [Structure Viewer](/modules/core/structure-viewer) | 3D interactive visualization of atoms, bonds, and lattices |
+| [File I/O](/modules/core/file-io) | Parse and export crystal/molecular structure files |
+| [Lattice & Cell](/modules/core/lattice-cell) | Lattice parameters, coordinate transforms, cell operations |
+| [Bonding](/modules/core/bonding) | Bond detection, editing, and coordination analysis |
 
 ### Crystallography
 
-| Module | Description | Docs |
-|--------|-------------|------|
-| [Surfaces & Slabs](/modules/crystallography/surfaces-slabs) | Miller index slab generation, vacuum layers, adsorption sites | [Link](/modules/crystallography/surfaces-slabs) |
-| [Symmetry](/modules/crystallography/symmetry) | Space group detection, Wyckoff positions, Bravais lattices | [Link](/modules/crystallography/symmetry) |
-| [Supercells](/modules/crystallography/supercells) | Periodic cell expansion and transformation | [Link](/modules/crystallography/supercells) |
+| Module | Description |
+|--------|-------------|
+| [Surfaces & Slabs](/modules/crystallography/surfaces-slabs) | Miller index slab generation, vacuum layers, adsorption sites |
+| [Symmetry](/modules/crystallography/symmetry) | Space group detection, Wyckoff positions, Bravais lattices |
+| [Supercells](/modules/crystallography/supercells) | Periodic cell expansion and transformation |
 
 ### Dynamics & Optimization
 
-| Module | Description | Docs |
-|--------|-------------|------|
-| [Trajectories](/modules/dynamics/trajectories) | MD trajectory playback, frame indexing, streaming | [Link](/modules/dynamics/trajectories) |
-| [Optimization](/modules/dynamics/optimization) | Structure relaxation with multiple calculators | [Link](/modules/dynamics/optimization) |
+| Module | Description |
+|--------|-------------|
+| [Trajectories](/modules/dynamics/trajectories) | MD trajectory playback, frame indexing, streaming |
+| [Optimization](/modules/dynamics/optimization) | Structure relaxation with multiple calculators |
 
 ### Analysis & Spectroscopy
 
-| Module | Description | Docs |
-|--------|-------------|------|
-| [Spectroscopy](/modules/analysis/spectroscopy) | XRD, RDF, band structure, density of states | [Link](/modules/analysis/spectroscopy) |
-| [Phase Diagrams](/modules/analysis/phase-diagrams) | Thermodynamic stability and convex hulls | [Link](/modules/analysis/phase-diagrams) |
-| [Composition](/modules/analysis/composition) | Chemical formula handling and composition charts | [Link](/modules/analysis/composition) |
-| [Periodic Table](/modules/analysis/periodic-table) | Interactive element explorer with property data | [Link](/modules/analysis/periodic-table) |
+| Module | Description |
+|--------|-------------|
+| [Spectroscopy](/modules/analysis/spectroscopy) | XRD, RDF, band structure, density of states |
+| [Phase Diagrams](/modules/analysis/phase-diagrams) | Thermodynamic stability and convex hulls |
+| [Composition](/modules/analysis/composition) | Chemical formula handling and composition charts |
+| [Periodic Table](/modules/analysis/periodic-table) | Interactive element explorer with property data |
 
 ### Integrations
 
-| Module | Description | Docs |
-|--------|-------------|------|
-| [Density Visualization](/modules/integrations/density-visualization) | CUBE file isosurfaces and slice planes | [Link](/modules/integrations/density-visualization) |
-| [Database Integration](/modules/integrations/database-integration) | OPTIMADE, Materials Project, PubChem search | [Link](/modules/integrations/database-integration) |
-| [Settings](/modules/core/settings) | 40+ configurable properties across platforms | [Link](/modules/core/settings) |
+| Module | Description |
+|--------|-------------|
+| [Density Visualization](/modules/integrations/density-visualization) | CUBE file isosurfaces and slice planes |
+| [Database Integration](/modules/integrations/database-integration) | OPTIMADE, Materials Project, PubChem search |
+| [Settings](/modules/core/settings) | 40+ configurable properties across platforms |
 
 ## Deployment Targets
 

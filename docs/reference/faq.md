@@ -4,7 +4,7 @@
 
 ### What is CatGo?
 
-CatGo (Catalysis Visualization System) is an open-source desktop application for computational materials science and catalysis research. It combines a 3D structure viewer, a node-based workflow editor with HPC orchestration, and a natural-language AI assistant (CatBot). CatGo is available as a desktop application (Tauri) and as a VSCode extension.
+CatGo is an **AI-driven workbench for computational materials science**. It combines a 3D structure viewer, a node-based workflow editor with HPC orchestration, and a natural-language AI assistant (CatBot). Available as a desktop application (Tauri) and as a VS Code extension.
 
 ### What file formats are supported?
 
