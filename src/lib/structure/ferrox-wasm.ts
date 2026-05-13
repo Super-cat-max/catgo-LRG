@@ -371,9 +371,11 @@ export async function compile_wasm_module(): Promise<WebAssembly.Module> {
   )
   let url = wasm_url_module.default as string
 
-  // vite-plugin-ferrox-wasm replaces the import with an absolute path like
-  // "/home/user/.../ferrox_bg.wasm". Prepend /@fs to make it a valid Vite dev URL.
-  if (url.startsWith(`/`) && !url.startsWith(`/@`)) {
+  // Dev only: vite-plugin-ferrox-wasm rewrites the import to an absolute
+  // filesystem path like "/home/user/.../ferrox_bg.wasm". Prepend /@fs so the
+  // Vite dev server can serve it. In production the same plugin emits a hashed
+  // asset URL (/assets/ferrox_bg-XXX.wasm) which must be left untouched.
+  if (import.meta.env.DEV && url.startsWith(`/`) && !url.startsWith(`/@`)) {
     url = `/@fs${url}`
   }
 
