@@ -261,7 +261,11 @@ pub fn run() {
                 configure_webkitgtk(&webview_window);
             }
 
-            // Before spawning sidecar, check if backend is already running
+            // In production builds, we *own* the sidecar. If something is on the port
+            // (e.g. an orphan from a previous abrupt exit), kill it so we can start
+            // fresh. In debug builds, honour an externally-running backend — that's
+            // the `pnpm desktop:serve` workflow where the developer runs Python
+            // separately on purpose.
             let port = std::env::var("SERVER_PORT").unwrap_or_else(|_| "8000".to_string());
             let backend_already_running = {
                 use std::net::TcpStream;
@@ -272,9 +276,36 @@ pub fn run() {
                 ).is_ok()
             };
 
-            if backend_already_running {
+            #[cfg(debug_assertions)]
+            let skip_spawn = backend_already_running;
+            #[cfg(not(debug_assertions))]
+            let skip_spawn = false;
+
+            if !skip_spawn && backend_already_running {
+                log::warn!(
+                    "[CatGo] Port {} occupied — killing any orphan catgo-server before spawning",
+                    port
+                );
+                // Use pkill to target only our own sidecar binary by full path.
+                // -f matches the full command line; -9 forces it (orphans may
+                //  ignore lighter signals if mid-request).
+                let exe_dir = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+                if let Some(dir) = exe_dir {
+                    let sidecar_path = dir.join("catgo-server");
+                    let pattern = sidecar_path.to_string_lossy().to_string();
+                    let _ = std::process::Command::new("pkill")
+                        .args(["-9", "-f", &pattern])
+                        .status();
+                    // Give the OS a moment to release the port.
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                }
+            }
+
+            if skip_spawn {
                 log::info!(
-                    "[CatGo] Backend already running on port {} — skipping sidecar spawn",
+                    "[CatGo] Backend already running on port {} — skipping sidecar spawn (debug build)",
                     port
                 );
             } else {
@@ -381,6 +412,32 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
+
+    // Catch Ctrl+C / SIGTERM / SIGHUP so we always tear the sidecar down,
+    // even when the user kills the terminal that launched the app. Without
+    // this, abrupt exits orphan the Python sidecar on port 8000.
+    {
+        let app_handle = app.handle().clone();
+        let _ = ctrlc::set_handler(move || {
+            log::info!("[CatGo] Received termination signal — cleaning up sidecar");
+            if let Ok(mut state) = app_handle.state::<Mutex<BackendState>>().lock() {
+                if let Some(child) = state.child.take() {
+                    let _ = child.kill();
+                }
+            }
+            // Belt-and-suspenders: also pkill in case the tracked child handle
+            // is stale (e.g. PyInstaller bootloader exec'd into a new PID).
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    let pattern = dir.join("catgo-server").to_string_lossy().to_string();
+                    let _ = std::process::Command::new("pkill")
+                        .args(["-9", "-f", &pattern])
+                        .status();
+                }
+            }
+            std::process::exit(0);
+        });
+    }
 
     app.run(|_app_handle, _event| {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
