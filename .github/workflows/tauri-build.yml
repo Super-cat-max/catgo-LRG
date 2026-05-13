@@ -16,6 +16,7 @@ jobs:
   build:
     permissions:
       contents: write
+      releases: write
     strategy:
       fail-fast: false
       matrix:
