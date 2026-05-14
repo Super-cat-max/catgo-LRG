@@ -98,7 +98,7 @@
       }}
     >
       <T.SphereGeometry args={[radius, 16, 16]} />
-      <T.MeshBasicMaterial color={site_color} />
+      <T.MeshBasicMaterial color={site_color} transparent opacity={0.6} depthWrite={false} />
     </T.Mesh>
   {/each}
 {/if}
