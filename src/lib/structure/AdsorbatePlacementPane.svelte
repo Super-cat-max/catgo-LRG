@@ -301,7 +301,7 @@
 
         if (is_ok(result)) {
           on_push_undo?.()
-          on_structure_change?.(result as unknown as AnyStructure)
+          on_structure_change?.(result.ok.structure as unknown as AnyStructure)
           success_message = `UFF optimization complete`
         } else {
           error_message = `UFF optimization failed`
