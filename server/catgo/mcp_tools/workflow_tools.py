@@ -852,6 +852,68 @@ def _graph_snapshot(graph: dict) -> str:
     return "\n".join(lines)
 
 
+# Schema-allowed keys for adsorbate_place — matches
+# src/lib/workflow/node-defs/utility/adsorbate-place.ts. Any other key the
+# LLM invents (e.g. `mode: "end-on"`, `dentate: ...`, `orientation: ...`)
+# gets either translated below or stripped, so the frontend NodeConfigPanel
+# doesn't render unknown noisy fields.
+_ADSORBATE_PLACE_ALLOWED_KEYS = {
+    "species", "custom_xyz", "site", "height", "auto_rotate", "quick_optimize",
+    # backend-internal, kept if already present
+    "structure_json", "site_index",
+    "_manual_adsorbate_cart", "_manual_normal", "_site_strategy",
+}
+_ADSORBATE_PLACE_SITE_ALIASES = {
+    "top": "ontop", "on_top": "ontop", "atop": "ontop",
+    "hollow3": "fcc", "hollow4": "fcc", "hollow": "fcc",
+}
+_UNICODE_SUBSCRIPT_MAP = str.maketrans({
+    "₀": "0", "₁": "1", "₂": "2", "₃": "3", "₄": "4",
+    "₅": "5", "₆": "6", "₇": "7", "₈": "8", "₉": "9",
+})
+
+
+def _normalize_adsorbate_place_params(merged: dict) -> dict:
+    """Coerce LLM-flavoured params into the canonical schema.
+
+    Three things happen:
+      * `site` aliases (`top` / `atop` / `hollow3` / …) are mapped to the
+        enum the frontend dropdown actually accepts.
+      * `species` is ASCII-folded (`H₂O` → `H2O`) and stripped of a leading
+        `*` so it can be looked up in the JSON library.
+      * The LLM-invented `mode: "end-on" | "side-on"` is translated to
+        `auto_rotate` (the closest concept this node supports) and then
+        dropped, so the panel doesn't render an unknown field.
+      * Any other key not in the schema is dropped with a logger.warning,
+        so the workflow editor doesn't show garbage params after CatBot.
+    """
+    out = dict(merged)
+    # site
+    _site = str(out.get("site", "")).lower().strip()
+    if _site in _ADSORBATE_PLACE_SITE_ALIASES:
+        out["site"] = _ADSORBATE_PLACE_SITE_ALIASES[_site]
+    # species
+    _sp_raw = str(out.get("species", "")).lstrip("*").strip()
+    _sp_ascii = _sp_raw.translate(_UNICODE_SUBSCRIPT_MAP)
+    if _sp_ascii and _sp_ascii != out.get("species"):
+        out["species"] = _sp_ascii
+    # mode (LLM-invented) → auto_rotate
+    if "mode" in out:
+        _m = str(out["mode"]).lower().strip()
+        if _m in ("end-on", "end_on", "endon", "vertical", "upright"):
+            out.setdefault("auto_rotate", True)
+        elif _m in ("side-on", "side_on", "sideon", "flat", "horizontal", "parallel"):
+            out["auto_rotate"] = False
+        del out["mode"]
+    # strip anything not in the schema
+    dropped = [k for k in out if k not in _ADSORBATE_PLACE_ALLOWED_KEYS]
+    if dropped:
+        logger.warning("adsorbate_place: dropped unknown params from LLM: %s", dropped)
+        for k in dropped:
+            del out[k]
+    return out
+
+
 def _validate_graph(graph: dict) -> tuple[list[str], list[str]]:
     """Validate workflow DAG — returns ``(errors, warnings)``.
 
@@ -1232,6 +1294,12 @@ async def _handle_workflow(client: httpx.AsyncClient, args: dict) -> list[TextCo
                             default_params = dict(_NODE_DEFAULTS[alt].get("defaults", {}))
                     merged = {**default_params, **user_params}
 
+                    # Canonicalise LLM-flavoured params (site aliases, ASCII
+                    # species, drop invented keys) so the stored graph contains
+                    # exactly what the frontend NodeConfigPanel expects.
+                    if node_type == "adsorbate_place":
+                        merged = _normalize_adsorbate_place_params(merged)
+
                     # Auto-capture structure for structure_input
                     if node_type == "structure_input" and not merged.get("structure_json"):
                         mp_id = merged.get("mp_id") or merged.get("structure_id")
@@ -1468,6 +1536,11 @@ async def _handle_workflow(client: httpx.AsyncClient, args: dict) -> list[TextCo
                         default_params = dict(_NODE_DEFAULTS[alt_key].get("defaults", {}))
                 merged_params = {**default_params, **user_params}
 
+                # Canonicalise LLM-flavoured params for adsorbate_place. See
+                # _normalize_adsorbate_place_params docstring for the rules.
+                if node_type == "adsorbate_place":
+                    merged_params = _normalize_adsorbate_place_params(merged_params)
+
                 # Auto-capture current viewer structure for structure_input nodes
                 if node_type == "structure_input" and not merged_params.get("structure_json"):
                     try:
@@ -1608,7 +1681,10 @@ async def _handle_workflow(client: httpx.AsyncClient, args: dict) -> list[TextCo
                 found = False
                 for n in nodes:
                     if n["id"] == node_id:
-                        n["params"] = {**n.get("params", {}), **params}
+                        merged_set = {**n.get("params", {}), **params}
+                        if n.get("type") == "adsorbate_place":
+                            merged_set = _normalize_adsorbate_place_params(merged_set)
+                        n["params"] = merged_set
                         found = True
                         break
                 if not found:

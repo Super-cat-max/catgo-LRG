@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import sys
+import time
 
 import httpx
 from catgo.mcp_tools.helpers import _push_workflow_navigate
@@ -259,6 +260,24 @@ TOOLS = [
             "between two structure_inputs).\n\n"
             "CATALYSIS: Use slab_gen + adsorbate_place nodes (NOT catgo_structure) for slabs and "
             "adsorbates inside a workflow.\n"
+            "ADSORBATE_PLACE PARAMS — ONLY these keys are accepted; everything else is dropped:\n"
+            "  - species (ASCII formula, case-insensitive): "
+            "OH, O, OOH (OER/ORR); H (HER); CO, COOH, CHO, OCCO, CH3OH, OCH3, CH2OH, … (CO₂RR);\n"
+            "    N2, NNH, NHNH, NH2NH2, NH, NH2, NH3 (NRR); NO, NOH, NHOH, NH2OH, NO2, NO3 (NO₃RR).\n"
+            "    For the complete library call action='list_presets' preset_type='adsorbates'.\n"
+            "  - site (literal string, ONE OF): 'ontop', 'bridge', 'fcc', 'hcp', 'all'. "
+            "Do NOT write 'top' — the schema only accepts the exact strings above. "
+            "'all' picks the best ontop site automatically (closest to the slab xy centre).\n"
+            "  - height (Å, default 2.0): atom-surface distance.\n"
+            "  - auto_rotate (bool, default true): orient adsorbate perpendicular to surface "
+            "(end-on / η¹). Set false for side-on / η²-like placement.\n"
+            "  - quick_optimize: 'none' | 'uff' | 'xtb' — optional post-placement relax.\n"
+            "  DO NOT invent keys like 'mode', 'dentate', 'orientation', 'binding_mode' — the "
+            "schema rejects them and the panel will look empty to the user.\n"
+            "For OER, emit three adsorbate_place nodes feeding three geo_opt+freq+gibbs_energy "
+            "chains that converge on ONE free_energy aggregator: species='OH', 'O', 'OOH', "
+            "all with site='ontop' (or 'fcc'/'hcp' if the user explicitly requested hollow). "
+            "CO₂RR / NRR / ORR follow the same shape with their respective intermediates.\n"
             "FREQ NODES: Do NOT copy geo_opt params. Freq requires kpoints='1×1×1', NCORE=0, LREAL=.FALSE. "
             "For slabs: set freeze_mode='layers', freeze_layers=N (N=total slab layers, only adsorbate vibrates).\n\n"
             "CONFIRMATION: After the workflow is built, reply in ONE short sentence — "
@@ -1797,6 +1816,22 @@ async def _handle_quickbuild(client: httpx.AsyncClient, args: dict) -> list[Text
     nodes: list[dict] = []
     if material_id:
         si_params: dict[str, object] = {"label": material_id, "mp_id": material_id}
+        # Pre-fetch the bulk structure here so the resulting workflow's
+        # `structure_input` node is usable immediately. Without this,
+        # quickbuild only writes {label, mp_id} and every downstream
+        # `resolve_input_structure(...)` returns null until the user
+        # manually clicks the node to trigger fetch — which makes
+        # slab_gen / adsorbate_place preview empty on first load.
+        # The MCP `batch` op already does this fetch (workflow_tools.py
+        # add_node + batch path); we mirror it here.
+        try:
+            from catgo.mcp_tools.workflow_tools import _fetch_structure_by_mp_id
+            struct_json = await _fetch_structure_by_mp_id(client, material_id)
+            if struct_json:
+                si_params["structure_json"] = struct_json
+                logger.info("Quickbuild: prefetched %s for structure_input", material_id)
+        except Exception as exc:
+            logger.warning("Quickbuild: failed to prefetch %s: %s", material_id, exc)
     else:
         si_params = {}
     nodes.append({"id": si_id, "type": "structure_input", "x": 80, "y": 200, "params": si_params})
@@ -1809,10 +1844,52 @@ async def _handle_quickbuild(client: httpx.AsyncClient, args: dict) -> list[Text
         })
         x += 220
 
+    # Edge shape: workflow_tools.batch / add_node store edges as
+    # {"id", "from", "to", "fromH", "toH"} and that's what the frontend
+    # canvas + the workflow engine read. The previous version of this
+    # function emitted {"source", "target"} and no handles, which got
+    # saved verbatim into graph_json — the edges were present in the DB
+    # but every consumer read `.from` / `.to` / `.fromH` and crashed on
+    # `undefined.split(...)`, so the canvas drew nothing and the engine
+    # couldn't traverse the DAG. Pick the handle names from each node's
+    # registered I/O so freq → free_energy etc. wire up correctly.
+    from catgo.mcp_tools.workflow_tools import _NODE_DEFAULTS as _ND
+    node_io: dict[str, tuple[list[str], list[str]]] = {}
+    for n in nodes:
+        nd = _ND.get(n["type"], {})
+        # Follow aliases (e.g. vasp_relax → geo_opt) the same way the
+        # batch + add_node handlers do.
+        if "_alias" in nd:
+            nd = _ND.get(nd["_alias"], {})
+        node_io[n["id"]] = (
+            list(nd.get("_inputs", []) or []),
+            list(nd.get("_outputs", []) or []),
+        )
+
+    def _pick_handles(from_id: str, to_id: str) -> tuple[str, str]:
+        outs = node_io.get(from_id, ([], []))[1]
+        ins = node_io.get(to_id, ([], []))[0]
+        # Prefer a name that appears on both sides (structure → structure,
+        # energy → energy, frequencies → frequencies). Otherwise fall back
+        # to the first declared handle on each side.
+        common = [h for h in outs if h in ins]
+        if common:
+            return common[0], common[0]
+        return (outs[0] if outs else "structure",
+                ins[0] if ins else "structure")
+
     edges: list[dict] = []
-    for src, dst in recipe["edges"]:
+    edge_ts = int(time.time())
+    for i, (src, dst) in enumerate(recipe["edges"]):
         from_id = si_id if src == "__si__" else src
-        edges.append({"source": from_id, "target": dst})
+        from_h, to_h = _pick_handles(from_id, dst)
+        edges.append({
+            "id": f"e{edge_ts}-{i:02d}",
+            "from": from_id,
+            "to": dst,
+            "fromH": from_h,
+            "toH": to_h,
+        })
 
     graph_json = {"nodes": nodes, "edges": edges}
     payload = {"name": final_name, "graph_json": json.dumps(graph_json)}

@@ -246,8 +246,14 @@ def run_adsorbate_place(
         # generate_adsorption_structures() directly would just return the
         # first available site, which often lands at a cell corner.
         site_key = (site or "all").lower()
-        pmg_key_map = {"ontop": "ontop", "on_top": "ontop", "bridge": "bridge",
+        # Accept LLM-natural aliases too — Claude / GPT tend to write "top"
+        # for an ontop site even when the schema enum says "ontop". Mapping
+        # them here is cheaper than catching every miswritten node param
+        # on the frontend.
+        pmg_key_map = {"ontop": "ontop", "on_top": "ontop", "top": "ontop",
+                       "atop": "ontop", "bridge": "bridge",
                        "hollow": "hollow", "fcc": "hollow", "hcp": "hollow",
+                       "hollow3": "hollow", "hollow4": "hollow",
                        "all": "ontop"}
         pmg_key = pmg_key_map.get(site_key, site_key)
         sites_by_type = asf.find_adsorption_sites(symm_reduce=0)
@@ -320,9 +326,13 @@ def run_adsorbate_place(
     site_key = site.lower()
     if site_key == "all":
         site_key = "atop"
-    # Map our naming to ferrox naming
-    _type_map = {"ontop": "atop", "on_top": "atop", "bridge": "bridge",
-                 "hollow": "hollow3", "hollow3": "hollow3", "hollow4": "hollow4"}
+    # Map our naming to ferrox naming. "top" / "atop" are accepted as
+    # LLM-natural aliases for "ontop" (CatBot tends to write "top"); "fcc"
+    # and "hcp" are the frontend's enum names for 3-fold hollow sites.
+    _type_map = {"ontop": "atop", "on_top": "atop", "top": "atop", "atop": "atop",
+                 "bridge": "bridge",
+                 "hollow": "hollow3", "hollow3": "hollow3", "hollow4": "hollow4",
+                 "fcc": "hollow3", "hcp": "hollow3"}
     ferrox_type = _type_map.get(site_key, site_key)
 
     filtered = [s for s in all_sites if s["site_type"] == ferrox_type]
