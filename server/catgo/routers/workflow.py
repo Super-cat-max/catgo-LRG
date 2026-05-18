@@ -836,6 +836,72 @@ def api_run_workflow(workflow_id: str, config: WorkflowRunConfig):
         raise HTTPException(status_code=500, detail=f"Workflow execution failed: {e}")
 
 
+@router.post("/{workflow_id}/reconcile-from-hpc")
+async def api_reconcile_from_hpc(workflow_id: str):
+    """Probe SLURM for this workflow's tasks and sync DB state.
+
+    Called by the frontend when the user opens a workflow that may have
+    been running before the last CatGo shutdown. Forces one immediate
+    scan cycle for the workflow on the engine loop — which polls every
+    active task's hpc_job_id, runs transient-error recovery, and writes
+    truth back into both V2 and V1 DBs. Without this the user has to
+    wait up to `poll_interval` seconds (default 15s) before the periodic
+    scanner picks it up, which feels broken right after re-opening.
+    """
+    try:
+        from catgo.workflow.engine.lifecycle import get_engine, get_engine_loop
+        engine = get_engine()
+        engine_loop = get_engine_loop()
+        if engine is None or engine_loop is None:
+            raise HTTPException(status_code=503, detail="Workflow engine not started")
+
+        # Verify workflow exists in V2 before scheduling work
+        from catgo.routers.workflow_engine import _db as engine_db
+        if engine_db is None:
+            raise HTTPException(status_code=500, detail="V2 engine DB not initialized")
+        try:
+            engine_db.get_workflow(workflow_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found in engine")
+
+        # _process_workflow is async and lives on the engine loop. Run it
+        # via run_coroutine_threadsafe so this FastAPI handler doesn't
+        # touch the engine's event loop directly. Time-box at 30s so a
+        # hung SSH probe doesn't tie up the HTTP request indefinitely.
+        future = asyncio.run_coroutine_threadsafe(
+            engine._process_workflow(workflow_id), engine_loop,
+        )
+        try:
+            await asyncio.wait_for(asyncio.wrap_future(future), timeout=30.0)
+        except asyncio.TimeoutError:
+            return {
+                "status": "timeout",
+                "message": "Reconcile is taking longer than 30s — scanner will continue in background",
+            }
+
+        # Return fresh task statuses so frontend can update without
+        # waiting for its next /run-status poll.
+        tasks = engine_db.get_all_tasks(workflow_id)
+        return {
+            "status": "ok",
+            "tasks": [
+                {
+                    "id": t["id"],
+                    "task_type": t["task_type"],
+                    "status": t["status"],
+                    "hpc_job_id": t.get("hpc_job_id"),
+                    "error_type": t.get("error_type"),
+                }
+                for t in tasks
+            ],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("[reconcile_from_hpc] %s: %s", workflow_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _run_config_to_engine_config(config: WorkflowRunConfig) -> dict:
     """Convert V1 WorkflowRunConfig to V2 engine config dict.
 
@@ -1450,7 +1516,12 @@ async def api_get_enriched_results(workflow_id: str):
 
 @router.get("/{workflow_id}/convergence/{step_id}")
 async def api_get_convergence(workflow_id: str, step_id: str):
-    """Read OSZICAR+OUTCAR convergence history from step's work directory."""
+    """Read convergence history from step's work directory.
+
+    Dispatches by engine: VASP → OSZICAR+OUTCAR, CP2K → cp2k.out/project.out.
+    Both parsers return the same ConvergenceData shape so the frontend chart
+    config can be shared across engines.
+    """
     try:
         step = _engine_get_step_status(workflow_id, step_id)
         if not step:
@@ -1467,10 +1538,24 @@ async def api_get_convergence(workflow_id: str, step_id: str):
         if not hpc or not hpc.conn:
             return {"points": [], "converged": False, "error": "HPC session not connected"}
 
-        from catgo.utils.job_parser import parse_vasp_convergence
+        # Decide which parser to use. Legacy `cp2k_*` task types and unified
+        # nodes (geo_opt / cell_opt / single_point / md) with software=cp2k
+        # both route to the CP2K parser. Everything else stays on the VASP
+        # parser — that's the historical default and what ORCA/MLP rely on
+        # via their own dedicated endpoints.
+        node_type = step.get("node_type", "") or ""
+        try:
+            step_params = json.loads(step.get("config_json", "{}") or "{}")
+        except Exception:
+            step_params = {}
+        software = (step_params.get("software") or "").lower()
+        is_cp2k = node_type.startswith("cp2k_") or software == "cp2k"
+
+        from catgo.utils.job_parser import parse_vasp_convergence, parse_cp2k_convergence
+        parser = parse_cp2k_convergence if is_cp2k else parse_vasp_convergence
         try:
             conv_data = await asyncio.wait_for(
-                parse_vasp_convergence(hpc.conn, work_dir), timeout=15.0
+                parser(hpc.conn, work_dir), timeout=15.0
             )
         except asyncio.TimeoutError:
             return {"points": [], "converged": False, "error": "Convergence fetch timed out (15s)"}
@@ -1482,14 +1567,24 @@ async def api_get_convergence(workflow_id: str, step_id: str):
         prev_energy = None
         for pt in conv_data.points:
             dE = (pt.energy - prev_energy) if prev_energy is not None else 0.0
-            points.append({
+            entry = {
                 "step": pt.step,
                 "energy": pt.energy,
                 "dE": dE,
                 "energy_sigma0": pt.energy_sigma0,
                 "max_force": pt.max_force,
                 "rms_force": pt.rms_force,
-            })
+            }
+            # MD-only fields — populated by parse_cp2k_convergence's MD branch.
+            # The frontend keys these by truthy >0 so emitting unconditionally
+            # is fine; the VaspMonitorPlot ignores them since VASP_SERIES
+            # doesn't reference them.
+            if pt.temperature > 0 or pt.potential_energy != 0 or pt.kinetic_energy != 0:
+                entry["temperature"] = pt.temperature
+                entry["kinetic_energy"] = pt.kinetic_energy
+                entry["potential_energy"] = pt.potential_energy
+                entry["conserved_energy"] = pt.conserved_energy
+            points.append(entry)
             prev_energy = pt.energy
 
         return {"points": points, "converged": conv_data.converged}
