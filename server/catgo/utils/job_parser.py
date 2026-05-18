@@ -661,9 +661,26 @@ async def parse_cp2k_convergence(
     energy_re = re.compile(
         r"ENERGY\|\s+Total FORCE_EVAL\s*\([^)]+\)\s*energy\s*\[(?:a\.u\.|hartree)\]:\s+(-?\d+\.\d+(?:[eE][+-]?\d+)?)"
     )
-    step_re = re.compile(r"\s+OPTIMIZATION STEP:\s+(\d+)")
-    max_grad_re = re.compile(r"Max\.\s*gradient\s*=\s*(-?\d+\.\d+(?:[eE][+-]?\d+)?)")
-    rms_grad_re = re.compile(r"RMS\s+gradient\s*=\s*(-?\d+\.\d+(?:[eE][+-]?\d+)?)")
+    # CP2K writes per-step blocks with different markers across versions:
+    #   - "--------  Informations at step =     1 ------" (CP2K 2023.x BFGS — most common)
+    #   - "OPTIMIZATION STEP:     1"                     (some older or alternative-optimizer variants)
+    # Match either. Single regex with alternation keeps the i-th match
+    # alignment with the i-th ENERGY| line intact.
+    step_re = re.compile(
+        r"(?:Informations at step\s*=|OPTIMIZATION STEP:)\s*(\d+)",
+        re.IGNORECASE,
+    )
+    # Gradient values appear in the per-step "Convergence check" block.
+    # Accept "Max. gradient", "Max gradient", or the "MAX. ATOMIC FORCE"
+    # variant some CP2K versions print in the force-eval summary.
+    max_grad_re = re.compile(
+        r"(?:Max\.?\s+(?:atomic\s+)?gradient|MAX\.?\s+ATOMIC\s+FORCE)\s*=?\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)",
+        re.IGNORECASE,
+    )
+    rms_grad_re = re.compile(
+        r"RMS\s+(?:atomic\s+)?(?:gradient|force)\s*=?\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)",
+        re.IGNORECASE,
+    )
 
     energies_ha = [float(m.group(1)) for m in energy_re.finditer(raw)]
     step_matches = list(step_re.finditer(raw))
